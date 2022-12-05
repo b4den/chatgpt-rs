@@ -1,13 +1,12 @@
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
-use reqwest::header::{HeaderMap, USER_AGENT, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE};
+use anyhow::{anyhow, Result, Context};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, COOKIE, USER_AGENT};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::types::SessionResult;
 
-// todo: use proper types for json data
 pub struct GPTClient {
     base_url: String,
     client: reqwest::Client,
@@ -17,9 +16,8 @@ pub struct GPTClient {
 
 impl GPTClient {
     pub fn new() -> Result<Self> {
-        let token = std::env::var("GPT_SESSION").expect (
-            "Please supply a valid token for GPT_SESSION env var"
-        );
+        let token = std::env::var("GPT_SESSION")
+            .expect("Please supply a valid token for GPT_SESSION env var");
         let headers = Self::construct_headers(&token);
         let client = reqwest::ClientBuilder::new()
             .default_headers(headers)
@@ -28,18 +26,32 @@ impl GPTClient {
 
         let base_url = "https://chat.openai.com/backend-api".to_string();
 
-
-        Ok(GPTClient { base_url, client, session_token: token, access_token: None })
+        Ok(GPTClient {
+            base_url,
+            client,
+            session_token: token,
+            access_token: None,
+        })
     }
 
     pub async fn refresh_access_token(&mut self) -> Result<()> {
         let session_endpoint = "https://chat.openai.com/api/auth/session";
         let mut headers = HeaderMap::new();
-        headers.insert(COOKIE,
-            HeaderValue::from_str(format!("__Secure-next-auth.session-token={}",
-                    self.session_token.clone()).as_str()).unwrap());
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_str(
+                format!(
+                    "__Secure-next-auth.session-token={}",
+                    self.session_token.clone()
+                )
+                .as_str(),
+            )
+            .unwrap(),
+        );
 
-        let res = self.client.get(session_endpoint)
+        let res = self
+            .client
+            .get(session_endpoint)
             .headers(headers)
             .send()
             .await?
@@ -50,12 +62,15 @@ impl GPTClient {
         Ok(())
     }
 
-    pub async fn post(&mut self, message: String) -> Result<()> {
+    pub async fn post(&mut self, message: String) -> Result<String> {
         if self.access_token.is_none() {
             self.refresh_access_token().await?;
         }
-        let access_token = self.access_token.as_ref()
+        let access_token = self
+            .access_token
+            .as_ref()
             .expect("No access token provided");
+
         let uuidv4 = Uuid::new_v4();
         let conv_id = Uuid::new_v4();
         let params = json!(
@@ -75,19 +90,18 @@ impl GPTClient {
               "parent_message_id": conv_id.to_string(),
 
         });
-        let res = self.client.post(format!("{}/{}",self.base_url, "conversation"))
-        .json(&params)
-        .header(AUTHORIZATION, HeaderValue::from_str(format!("Bearer {}",
-                    access_token).as_str()).unwrap())
+        let res = self
+            .client
+            .post(format!("{}/{}", self.base_url, "conversation"))
+            .json(&params)
+            .header(
+                AUTHORIZATION,
+                HeaderValue::from_str(format!("Bearer {}", access_token).as_str()).unwrap(),
+            )
             .send()
             .await?;
 
-        //println!("Debug result {res:?}");
         let response = res.text().await?;
-        //println!("{response}");
-
-        //let start = response.rfind("\"parts\": [\"");
-        //let end = response.rfind("\"]}");
         let start_field = "\"parts\": [\"";
         let end_field = "\"]}";
 
@@ -95,47 +109,27 @@ impl GPTClient {
         let end = response.rfind(end_field);
 
         let result = match (start, end) {
-            (Some(s), Some(e)) if s < e => Some(&response[s +
-                start_field.len()..e]),
+            (Some(s), Some(e)) if s < e => Some(response[s + start_field.len()..e].to_string()),
             _ => None,
         };
 
-        if let Some(res) = result {
-            println!("Got answer: \n {res}");
-        }
-
-        //use eventsource_stream::Eventsource;
-        //use reqwest::{Response, ResponseBuilderExt};
-        //use futures_util::StreamExt;
-
-        //let mut data = Vec::new();
-        //while let Some(item) = res.chunk().await? {
-        //    println!("Got bytes: {:?}", unsafe { std::str::from_utf8_unchecked(&item) });
-        //    //if &item[..]  == b"'[DONE]'" {
-        //    if item.ends_with(b"[DONE]\n\n") {
-        //        println!("Finished with stream!");
-        //        println!("Result: {}", unsafe { std::str::from_utf8_unchecked(&data[..]) });
-        //    }
-        //    data = item.to_vec();
-        //}
-        //stream = stream.byte_stream();
-        //let stream = Deserializer::from_str(&response).into_iter::<Value>();
-        //for value in stream {
-        //    println!("Value: {:?}", value);
-        //}
-        //let response = res.json::<ConversationResponse>().await?;
-        //println!("Response result {stream:?}");
-        Ok(())
+        result.context("Could not find a valid response")
     }
 
     fn construct_headers(token: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
 
-        headers.insert(USER_AGENT, HeaderValue::from_static(
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36"
-        ));
-        headers.insert(AUTHORIZATION, HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap());
+            AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36",
+            ),
+        );
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+        );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         headers
