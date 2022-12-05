@@ -1,0 +1,3 @@
+# ChatGPT Rust Library
+
+WIP!
