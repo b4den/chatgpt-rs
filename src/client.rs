@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::types::SessionResult;
 
+#[derive(Debug, Clone)]
 pub struct GPTClient {
     base_url: String,
     client: reqwest::Client,
